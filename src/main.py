@@ -10,7 +10,7 @@ except ImportError:
 def main():
     load_dotenv()
 
-    parser = argparse.ArgumentParser(description="List and search Qiita likes and stocks.")
+    parser = argparse.ArgumentParser(description="List and search Qiita stocks.")
     parser.add_argument("user_id", nargs="?", help="Qiita User ID")
     parser.add_argument("--search", "-s", help="Search query (e.g. 'python')")
     args = parser.parse_args()
@@ -41,25 +41,11 @@ def main():
         print(f"Error fetching stocks: {e}")
         stocks = []
 
-    print(f"Fetching likes for {user_id}...")
-    try:
-        likes = client.get_all_likes(user_id)
-        print(f"Found {len(likes)} likes.")
-    except Exception as e:
-        print(f"Error fetching likes: {e}")
-        likes = []
+    # Note: Qiita API v2 does not provide an endpoint to list all items liked by a user.
+    # Therefore, this tool only lists stocked items.
 
-    # Combine and deduplicate
-    # Stocks and likes are lists of items (dicts).
-    # Deduplicate by ID.
-    all_items_dict = {}
-    for item in stocks:
-        all_items_dict[item['id']] = item
-    for item in likes:
-        all_items_dict[item['id']] = item
-
-    all_items = list(all_items_dict.values())
-    print(f"Total unique items: {len(all_items)}")
+    all_items = stocks
+    print(f"Total items: {len(all_items)}")
 
     if args.search:
         query = args.search.lower()

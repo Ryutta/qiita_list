@@ -36,6 +36,17 @@ class QiitaClient:
             page += 1
         return all_stocks
 
+    def get_user_likes_via_api(self, user_id, page=1, per_page=100):
+        url = f"{self.BASE_URL}/users/{user_id}/likes"
+        params = {"page": page, "per_page": per_page}
+        try:
+            response = requests.get(url, headers=self.headers, params=params)
+            if response.status_code == 200:
+                return response.json()
+        except requests.RequestException:
+            pass
+        return None
+
     def get_user_likes_via_scraping(self, user_id, page=1):
         url = f"https://qiita.com/{user_id}/likes?page={page}"
         # Use a browser-like User-Agent to avoid 502/403
@@ -89,6 +100,8 @@ class QiitaClient:
             # Filter out items with empty titles (unless that's all we have)
             # Generally valid items will have a title link.
             valid_items = [item for item in items_dict.values() if item['title']]
+            if not valid_items and response.status_code == 200:
+                print(f"Warning: No likes found via scraping. This might be due to Qiita's page structure changes (CSR). Only stocks are available.", file=sys.stderr)
             return valid_items
 
         except Exception as e:
@@ -98,15 +111,36 @@ class QiitaClient:
     def get_all_likes(self, user_id):
         all_likes = []
         page = 1
+
+        # Try API first
+        api_worked = False
         while True:
-            # We use scraping because API endpoint is gone
+            likes = self.get_user_likes_via_api(user_id, page=page)
+            if likes is None:
+                # API failed (404 or error), break loop and fallback to scraping if page==1
+                break
+
+            if not likes:
+                # API returned empty list (end of pagination)
+                api_worked = True
+                break
+
+            all_likes.extend(likes)
+            page += 1
+            api_worked = True # If we got items, API worked
+
+        if api_worked:
+            return all_likes
+
+        # Fallback to scraping
+        page = 1
+        while True:
             likes = self.get_user_likes_via_scraping(user_id, page=page)
             if not likes:
                 break
             all_likes.extend(likes)
             page += 1
-            # Safety break for scraping infinite loops
-            if page > 50: # Arbitrary limit to prevent infinite run if detection fails
+            if page > 50:
                 break
         return all_likes
 
@@ -135,6 +169,8 @@ class QiitaClient:
             response = requests.delete(url, headers=self.headers)
             if response.status_code in [200, 204]:
                 return True
+            else:
+                print(f"Failed to unlike item {item_id}: {response.status_code} {response.text}", file=sys.stderr)
         except requests.RequestException as e:
             print(f"Error unliking item {item_id}: {e}", file=sys.stderr)
             return False
@@ -147,6 +183,8 @@ class QiitaClient:
             response = requests.delete(url, headers=self.headers)
             if response.status_code == 204:
                 return True
+            else:
+                print(f"Failed to unstock item {item_id}: {response.status_code} {response.text}", file=sys.stderr)
         except requests.RequestException as e:
             print(f"Error unstocking item {item_id}: {e}", file=sys.stderr)
         return False

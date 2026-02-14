@@ -33,15 +33,33 @@ class QiitaClient:
         return all_stocks
 
     def get_likes(self, user_id, page=1, per_page=100):
-        # NOTE: This endpoint is commonly used in unofficial wrappers but might be deprecated or non-standard.
-        url = f"{self.BASE_URL}/users/{user_id}/likes"
+        # NOTE: The standard endpoint for fetching likes seems to be missing or deprecated.
+        # We try multiple potential endpoints.
+        endpoints = [
+            f"{self.BASE_URL}/users/{user_id}/likes",
+            f"{self.BASE_URL}/users/{user_id}/likes/items",
+            f"{self.BASE_URL}/users/{user_id}/liked_items"
+        ]
+
         params = {"page": page, "per_page": per_page}
-        response = requests.get(url, headers=self.headers, params=params)
-        if response.status_code == 404:
-             print(f"Warning: Endpoint {url} not found (404). Unable to fetch likes directly via this endpoint.", file=sys.stderr)
-             return []
-        response.raise_for_status()
-        return response.json()
+
+        for url in endpoints:
+            try:
+                response = requests.get(url, headers=self.headers, params=params)
+
+                if response.status_code == 200:
+                    return response.json()
+                elif response.status_code == 401:
+                    print(f"Warning: Endpoint {url} returned 401 Unauthorized. Ensure your token has 'read_qiita' scope.", file=sys.stderr)
+                elif response.status_code == 404:
+                    print(f"Warning: Endpoint {url} not found (404).", file=sys.stderr)
+                else:
+                    response.raise_for_status()
+            except requests.exceptions.RequestException as e:
+                print(f"Error accessing {url}: {e}", file=sys.stderr)
+
+        print(f"Warning: Could not fetch likes from any known endpoint for user {user_id}.", file=sys.stderr)
+        return []
 
     def get_all_likes(self, user_id):
         all_likes = []

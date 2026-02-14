@@ -312,6 +312,8 @@ class QiitaClient:
             response = requests.delete(url, headers=self.headers)
             if response.status_code in [200, 204]:
                 return True
+            elif response.status_code == 403:
+                print(f"Failed to unlike item {item_id}: 403 Forbidden. Please check if your QIITA_ACCESS_TOKEN has 'write_qiita' scope.", file=sys.stderr)
             else:
                 print(f"Failed to unlike item {item_id}: {response.status_code} {response.text}", file=sys.stderr)
         except requests.RequestException as e:
@@ -326,6 +328,8 @@ class QiitaClient:
             response = requests.delete(url, headers=self.headers)
             if response.status_code == 204:
                 return True
+            elif response.status_code == 403:
+                print(f"Failed to unstock item {item_id}: 403 Forbidden. Please check if your QIITA_ACCESS_TOKEN has 'write_qiita' scope.", file=sys.stderr)
             else:
                 print(f"Failed to unstock item {item_id}: {response.status_code} {response.text}", file=sys.stderr)
         except requests.RequestException as e:

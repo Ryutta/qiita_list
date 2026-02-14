@@ -2,6 +2,7 @@ import os
 import requests
 import sys
 import re
+import json
 from bs4 import BeautifulSoup
 
 class QiitaClient:
@@ -46,6 +47,143 @@ class QiitaClient:
         except requests.RequestException:
             pass
         return None
+
+    def get_all_likes_via_graphql(self, user_id):
+        # Create session to handle cookies/CSRF
+        session = requests.Session()
+        session.headers.update({
+             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        })
+
+        try:
+            # Step 1: Get CSRF Token
+            url_html = f"https://qiita.com/{user_id}/likes"
+            resp_html = session.get(url_html)
+            if resp_html.status_code != 200:
+                return None
+            
+            soup = BeautifulSoup(resp_html.content, 'html.parser')
+            data_container = soup.find('div', id='dataContainer')
+            if not data_container:
+                # If dataContainer is missing, maybe it's not a React page or user not found
+                return None
+            
+            data_config_str = data_container.get('data-config')
+            if not data_config_str:
+                return None
+            
+            data_config = json.loads(data_config_str)
+            csrf_token = data_config.get('settings', {}).get('csrfToken')
+            if not csrf_token:
+                return None
+            
+            # Step 2: Loop GraphQL
+            all_items = []
+            page = 1
+            per_page = 20 # Standard page size for Qiita pagination via GraphQL
+            
+            url_graphql = "https://qiita.com/graphql"
+            # Updated query to match verified structure
+            query = """
+            query GetUserPaginatedArticleLikes($urlName: String!, $page: Int!, $per: Int!) {
+              user(urlName: $urlName) {
+                paginatedArticleLikes(page: $page, per: $per) {
+                  items {
+                    createdAt
+                    article {
+                      title
+                      linkUrl
+                      uuid
+                      likesCount
+                      publishedAt
+                      author {
+                        urlName
+                      }
+                      tags {
+                        name
+                        urlName
+                      }
+                    }
+                  }
+                  pageData {
+                    isLastPage
+                    totalPages
+                  }
+                }
+              }
+            }
+            """
+            
+            while True:
+                payload = {
+                    "operationName": "GetUserPaginatedArticleLikes",
+                    "variables": {
+                        "urlName": user_id,
+                        "page": page,
+                        "per": per_page
+                    },
+                    "query": query
+                }
+                
+                gql_headers = {
+                    'Content-Type': 'application/json',
+                    'X-CSRF-Token': csrf_token
+                }
+                
+                resp_gql = session.post(url_graphql, json=payload, headers=gql_headers)
+                if resp_gql.status_code != 200:
+                    break
+                
+                data = resp_gql.json()
+                # Check for errors
+                if 'errors' in data:
+                    print(f"GraphQL errors: {data['errors']}", file=sys.stderr)
+                    break
+                    
+                user_data = data.get('data', {}).get('user')
+                if not user_data:
+                    break
+                    
+                paginated_data = user_data.get('paginatedArticleLikes')
+                if not paginated_data:
+                    break
+                    
+                items = paginated_data.get('items', [])
+                page_data = paginated_data.get('pageData', {})
+                
+                for item in items:
+                    art = item.get('article')
+                    if not art:
+                        continue
+                        
+                    mapped_item = {
+                        'id': art.get('uuid'), # Use UUID as ID
+                        'title': art.get('title'),
+                        'url': art.get('linkUrl'),
+                        'user': {'id': art.get('author', {}).get('urlName')},
+                        'likes_count': art.get('likesCount', 0),
+                        'created_at': art.get('publishedAt', ''),
+                        'is_like': True,
+                    }
+                    
+                    tags = art.get('tags', [])
+                    if tags:
+                        mapped_item['tags'] = [{'name': t.get('name'), 'url_name': t.get('urlName')} for t in tags]
+                    else:
+                        mapped_item['tags'] = []
+                    
+                    all_items.append(mapped_item)
+                
+                if page_data.get('isLastPage', True):
+                    break
+                
+                page += 1
+                
+            return all_items
+            
+        except Exception as e:
+            print(f"Error fetching likes via GraphQL: {e}", file=sys.stderr)
+            return None
 
     def get_user_likes_via_scraping(self, user_id, page=1):
         url = f"https://qiita.com/{user_id}/likes?page={page}"
@@ -111,28 +249,33 @@ class QiitaClient:
     def get_all_likes(self, user_id):
         all_likes = []
         page = 1
-
-        # Try API first
+        
+        # 1. Try API v2 first
         api_worked = False
         while True:
             likes = self.get_user_likes_via_api(user_id, page=page)
             if likes is None:
-                # API failed (404 or error), break loop and fallback to scraping if page==1
+                # API failed (404 or error), break loop
                 break
-
+            
             if not likes:
                 # API returned empty list (end of pagination)
                 api_worked = True
                 break
-
+                
             all_likes.extend(likes)
             page += 1
             api_worked = True # If we got items, API worked
-
+            
         if api_worked:
             return all_likes
 
-        # Fallback to scraping
+        # 2. Try GraphQL (Internal API)
+        graphql_likes = self.get_all_likes_via_graphql(user_id)
+        if graphql_likes is not None:
+            return graphql_likes
+
+        # 3. Fallback to scraping (likely to fail due to CSR, but kept as last resort)
         page = 1
         while True:
             likes = self.get_user_likes_via_scraping(user_id, page=page)
@@ -140,7 +283,7 @@ class QiitaClient:
                 break
             all_likes.extend(likes)
             page += 1
-            if page > 50:
+            if page > 50: 
                 break
         return all_likes
 
